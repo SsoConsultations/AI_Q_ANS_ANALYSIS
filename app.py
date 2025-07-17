@@ -1,12 +1,12 @@
 import streamlit as st
-import openai
 import pandas as pd
 import PyPDF2
 import io
 import re
+from openai import OpenAI
 
-# Set OpenAI API key from Streamlit secrets
-openai.api_key = st.secrets["OPENAI_API_KEY"]
+# Initialize OpenAI client with API key from Streamlit secrets
+client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 # ---------- Helper Functions ----------
 
@@ -67,7 +67,7 @@ Student's Answer:
 Only return the score as a number from 0 to 5. Do not include any other explanation.
 """
     try:
-        response = openai.ChatCompletion.create(
+        response = client.chat.completions.create(
             model="gpt-4",
             messages=[
                 {"role": "system", "content": "You are a strict, objective academic evaluator."},
@@ -75,7 +75,7 @@ Only return the score as a number from 0 to 5. Do not include any other explanat
             ],
             temperature=0
         )
-        result = response['choices'][0]['message']['content'].strip()
+        result = response.choices[0].message.content.strip()
         return extract_score(result)
     except Exception as e:
         st.warning(f"Evaluation failed: {e}")
