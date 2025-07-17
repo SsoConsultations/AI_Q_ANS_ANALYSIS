@@ -3,6 +3,7 @@ import openai
 import pandas as pd
 import PyPDF2
 import io
+import re
 
 # Set OpenAI API key from Streamlit secrets
 openai.api_key = st.secrets["OPENAI_API_KEY"]
@@ -16,33 +17,54 @@ def extract_text_from_pdf(pdf_file):
         text += page.extract_text()
     return text
 
-def split_questions_from_text(text):
+def normalize_question_keys(text):
     questions = {}
     current_q = None
     for line in text.splitlines():
         line = line.strip()
-        if line.lower().startswith("q") and "." in line:
-            current_q = line.split('.')[0].strip().upper()
+        # Match Q1, Q1., q1, etc.
+        match = re.match(r"^(Q?)(\d{1,2})[.:)]?\s", line, re.IGNORECASE)
+        if match:
+            qnum = f"Q{match.group(2)}"
+            current_q = qnum
             questions[current_q] = line
         elif current_q:
             questions[current_q] += " " + line
     return questions
 
-def evaluate_answer_with_gpt(question, rubric, answer):
+def extract_score(text):
+    match = re.search(r"\b([0-5])\b", text)
+    return int(match.group(1)) if match else 0
+
+def evaluate_answer_with_gpt(question, answer):
     prompt = f"""
-You are an exam evaluator.
+You are an academic evaluator for a university exam. You are given a question, its scoring rubric, and a student's answer.
 
-Below is a question, its rubric, and a student's answer.
+Your task is to assign a score out of 5 marks strictly based on the rubric.
 
-Evaluate the answer out of 5 marks based ONLY on the rubric. Return only a number between 0 and 5.
+Do not be lenient or add explanation. Just follow the rubric.
 
-Question: {question}
+---
 
-Rubric: {rubric}
+Question:
+{question}
 
-Student Answer: {answer}
+Rubric (scoring guide):
+- 5 marks: All key elements fully explained with appropriate examples.
+- 4 marks: All elements explained, but examples are missing or partially relevant.
+- 3 marks: At least 50% of the key elements explained.
+- 2 marks: Only a few points or vague explanation.
+- 1 mark: Minimal relevant content or vague/incorrect concepts.
+- 0 marks: Not attempted or completely irrelevant answer.
 
-Score (only number 0-5):
+---
+
+Student's Answer:
+{answer}
+
+---
+
+Only return the score as a number from 0 to 5. Do not include any other explanation.
 """
     try:
         response = openai.ChatCompletion.create(
@@ -54,7 +76,7 @@ Score (only number 0-5):
             temperature=0
         )
         result = response['choices'][0]['message']['content'].strip()
-        return int(result) if result.isdigit() else 0
+        return extract_score(result)
     except Exception as e:
         st.warning(f"Evaluation failed: {e}")
         return 0
@@ -76,23 +98,23 @@ answer_files = st.file_uploader("Upload Answer Sheets (PDF)", type=["pdf"], acce
 if qpaper_file and answer_files:
     with st.spinner("Processing question paper..."):
         qpaper_text = extract_text_from_pdf(qpaper_file)
-        questions = split_questions_from_text(qpaper_text)
+        questions = normalize_question_keys(qpaper_text)
 
-    # Create empty dataframe to store results
-    result_df = pd.DataFrame(columns=["Question No", "Max Marks"] + [f"{f.name}" for f in answer_files])
+    # Create results table
+    result_df = pd.DataFrame(columns=["Question No", "Max Marks"] + [f.name for f in answer_files])
     result_df["Question No"] = list(questions.keys())
     result_df["Max Marks"] = 5
 
-    with st.spinner("Evaluating all answer sheets..."):
+    with st.spinner("Evaluating answers..."):
         for idx, (qno, qtext) in enumerate(questions.items()):
             for f in answer_files:
                 answer_text = extract_text_from_pdf(f)
-                answers = split_questions_from_text(answer_text)
+                answers = normalize_question_keys(answer_text)
                 student_answer = answers.get(qno, "")
-                score = evaluate_answer_with_gpt(qtext, "Evaluate based on how complete and relevant the answer is.", student_answer)
+                score = evaluate_answer_with_gpt(qtext, student_answer)
                 result_df.at[idx, f.name] = score
 
-    # Add Total row
+    # Add total row
     total_row = ["Total", ""] + [result_df[col][:-1].astype(int).sum() for col in result_df.columns[2:]]
     result_df.loc[len(result_df)] = total_row
 
