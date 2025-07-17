@@ -85,6 +85,9 @@ Only return the score as a number from 0 to 5. Do not include any other explanat
 
 st.set_page_config(page_title="Automated Answer Sheet Evaluator")
 st.title("📊 Automated Answer Sheet Evaluator")
+# ✅ Check if OpenAI API key loaded correctly
+st.success(f"Loaded OpenAI key (last 4 chars): {st.secrets['OPENAI_API_KEY'][-4:]}")
+
 
 # Step 1: Upload Question Paper (Rubric)
 st.header("1. Upload Question Paper with Rubrics")
