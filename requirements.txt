@@ -4,3 +4,6 @@ pandas
 PyPDF2
 python-docx
 python-dotenv
+pdfplumber
+pytesseract
+Pillow
