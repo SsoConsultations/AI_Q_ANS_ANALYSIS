@@ -83,6 +83,7 @@ def inject_custom_css(logo_path="SsoLogo.jpg"):
         </div>
         """
     
+    # The copyright year has been updated to 2025 as per current date
     css += """
     <div class="copyright-footer">
         © Copyright 2025 SSO Consultants
