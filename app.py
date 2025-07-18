@@ -33,24 +33,21 @@ def inject_logo_css(logo_path="SsoLogo.jpg"):
         st.markdown(
             f"""
             <style>
-            .css-1jc7on1.e16nr0p31 {{ /* Target the main header/top area */
-                position: relative;
+            .top-right-logo-container {{
+                position: fixed; /* Position relative to the viewport */
+                top: 20px;       /* Distance from the top */
+                right: 20px;     /* Distance from the right */
+                width: 120px;    /* Set logo width - adjust as needed */
+                height: auto;    /* Maintain aspect ratio */
+                z-index: 1000;   /* Ensure it's above other elements */
             }}
-            .logo-container {{
-                position: absolute;
-                top: 0px; /* Adjust as needed */
-                right: 20px; /* Adjust as needed */
-                width: 100px; /* Set logo width */
-                height: auto; /* Maintain aspect ratio */
-                z-index: 1000; /* Ensure it's above other elements */
-            }}
-            .logo-container img {{
+            .top-right-logo-container img {{
                 width: 100%;
                 height: 100%;
                 object-fit: contain; /* Ensures the entire image fits within the container */
             }}
             </style>
-            <div class="logo-container">
+            <div class="top-right-logo-container">
                 <img src="data:image/jpeg;base64,{logo_base64}" alt="Company Logo">
             </div>
             """,
@@ -185,7 +182,7 @@ Give only a number out of {max_mark}.
         # Display success message only for the first successful API call in the session
         # This confirms the OpenAI API key is working.
         if "openai_api_working_confirmed" not in st.session_state:
-            st.success("🎉 OpenAI API key is correctly configured and working correctly!")
+            st.success("脂 OpenAI API key is correctly configured and working correctly!")
             st.session_state.openai_api_working_confirmed = True
 
         return float(score_str)
@@ -216,7 +213,7 @@ def login():
     """
     Handles user login using Streamlit secrets for credentials.
     """
-    st.title("🔐 Answer Sheet Evaluator - Login")
+    st.title("柏 Answer Sheet Evaluator - Login")
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
     if st.button("Login"):
@@ -265,7 +262,7 @@ except KeyError:
 # Inject logo CSS for the main application pages
 inject_logo_css()
 
-st.title("📄 Dynamic Answer Sheet Evaluation Dashboard")
+st.title("塘 Dynamic Answer Sheet Evaluation Dashboard")
 
 st.header("Step 1: Upload Question Paper (Rubric)")
 rubric_file = st.file_uploader("Upload Rubric File (.docx or .pdf)", type=["docx", "pdf"])
@@ -354,7 +351,7 @@ if rubric_text and files: # Proceed only if rubric and student files are uploade
     total_row = [sum(max_marks_list)] + [df_scores[col].sum() for col in df_scores.columns if col != "Max Marks"]
     df_scores.loc["Total"] = total_row # Add total row to DataFrame
 
-    st.markdown("### 📊 Final Evaluation Table")
+    st.markdown("### 投 Final Evaluation Table")
     st.dataframe(df_scores)
 
     # -------------------------
@@ -379,7 +376,7 @@ if rubric_text and files: # Proceed only if rubric and student files are uploade
     excel_data = to_excel(df_scores)
     b64 = base64.b64encode(excel_data).decode() # Encode to base64 for download link
     # Create a download link for the Excel file
-    href = f'<a href="data:application/octet-stream;base64,{b64}" download="evaluation_report.xlsx">📥 Download Excel Report</a>'
+    href = f'<a href="data:application/octet-stream;base64,{b64}" download="evaluation_report.xlsx">踏 Download Excel Report</a>'
     st.markdown(href, unsafe_allow_html=True)
 else:
     # Initial message if no files are uploaded yet
