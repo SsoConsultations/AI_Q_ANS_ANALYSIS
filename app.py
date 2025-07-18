@@ -299,9 +299,11 @@ def score_answer(student_answer, ideal_rubric, max_marks):
 
     # Fallback to SentenceTransformer semantic similarity
     try:
+        # Load model (from cache)
+        model_st = load_model_with_feedback()
         # Encode sentences to get their embeddings
-        answer_embedding = model.encode(student_answer, convert_to_tensor=True)
-        rubric_embedding = model.encode(ideal_rubric, convert_to_tensor=True)
+        answer_embedding = model_st.encode(student_answer, convert_to_tensor=True)
+        rubric_embedding = model_st.encode(ideal_rubric, convert_to_tensor=True)
 
         # Calculate cosine similarity
         cosine_similarity = util.cos_sim(answer_embedding, rubric_embedding).item()
@@ -372,7 +374,7 @@ with st.sidebar:
     # Initialize flag for loading NLP model and OpenAI key
     if not st.session_state.initialized:
         # Load NLP model early with detailed feedback
-        model = load_model_with_feedback()
+        model_nlp = load_model_with_feedback() # Call once to load and show feedback
 
         # Initialize OpenAI API Key and check validity with detailed feedback
         st.info("Starting OpenAI API key verification...")
@@ -399,10 +401,10 @@ with st.sidebar:
         st.session_state.initialized = True
         st.rerun() # Rerun to display the main app sections after initialization
     else:
-        # If already initialized, just show status
+        # If already initialized, just show status (these messages come from session state/cache)
         st.success("App resources are ready!")
-        # Re-load model (from cache) for subsequent runs to be available globally
-        model = load_model_with_feedback() # This will be fast due to @st.cache_resource
+        # Ensure the model is loaded (from cache, so fast) for the main script
+        model_nlp = load_model_with_feedback() 
         if st.session_state.openai_api_working_confirmed:
             st.success("OpenAI API key confirmed!")
         else:
@@ -438,102 +440,111 @@ with col1:
 with col2:
     rubric_file = st.file_uploader("Upload Rubric File (.docx or .pdf)", type=["docx", "pdf"], key="rubric_uploader")
 
-# Process and validate files if both are uploaded
+# Process and validate files if both are uploaded, or if they were already processed
 if question_paper_file and rubric_file:
-    qp_text = ""
-    rubric_text = ""
+    # Only re-process if files have changed (simple check)
+    if (st.session_state.get('last_qp_file_id') != question_paper_file.file_id or
+        st.session_state.get('last_rubric_file_id') != rubric_file.file_id or
+        st.session_state.all_questions_data is None): # Reprocess if data is not loaded
 
-    # Extract text from Question Paper
-    with st.spinner("Extracting text from Question Paper..."):
-        if question_paper_file.name.endswith(".pdf"):
-            qp_text = extract_text_from_pdf(question_paper_file)
-        else:
-            qp_text = extract_text_from_docx(question_paper_file)
+        qp_text = ""
+        rubric_text = ""
 
-    # Extract text from Rubric File
-    with st.spinner("Extracting text from Rubric File..."):
-        if rubric_file.name.endswith(".pdf"):
-            rubric_text = extract_text_from_pdf(rubric_file)
-        else:
-            rubric_text = extract_text_from_docx(rubric_file)
+        # Extract text from Question Paper
+        with st.spinner("Extracting text from Question Paper..."):
+            if question_paper_file.name.endswith(".pdf"):
+                qp_text = extract_text_from_pdf(question_paper_file)
+            else:
+                qp_text = extract_text_from_docx(question_paper_file)
 
-    if qp_text and rubric_text:
-        # Parse data from both files
-        with st.spinner("Parsing question paper and rubric data..."):
-            qp_questions_data = parse_question_paper_file(qp_text)
-            parsed_rubrics_data = parse_rubric_file(rubric_text)
+        # Extract text from Rubric File
+        with st.spinner("Extracting text from Rubric File..."):
+            if rubric_file.name.endswith(".pdf"):
+                rubric_text = extract_text_from_pdf(rubric_file)
+            else:
+                rubric_text = extract_text_from_docx(rubric_file)
 
-        # --- Validation Logic ---
-        st.subheader("Document Validation")
-        validation_errors = []
+        if qp_text and rubric_text:
+            # Parse data from both files
+            with st.spinner("Parsing question paper and rubric data..."):
+                qp_questions_data = parse_question_paper_file(qp_text)
+                parsed_rubrics_data = parse_rubric_file(rubric_text)
 
-        # 1. Check total number of questions/rubrics
-        if len(qp_questions_data) != len(parsed_rubrics_data):
-            validation_errors.append(
-                f"Mismatch in total number of questions: Question Paper has {len(qp_questions_data)} "
-                f"questions, while Rubric File has {len(parsed_rubrics_data)} rubrics."
-            )
+            # --- Validation Logic ---
+            st.subheader("Document Validation")
+            validation_errors = []
 
-        # 2. Check Max Marks consistency for each question
-        all_questions_data = {} # This will store the merged and validated data
-        
-        # Get all unique question numbers from both files, sorted numerically
-        all_q_nums = sorted(list(set(qp_questions_data.keys()).union(set(parsed_rubrics_data.keys()))), key=lambda x: int(x[1:]))
-
-        for q_num in all_q_nums:
-            qp_info = qp_questions_data.get(q_num)
-            rubric_info = parsed_rubrics_data.get(q_num)
-
-            if not qp_info:
-                validation_errors.append(f"Question {q_num} found in Rubric File but not in Question Paper.")
-                continue
-            if not rubric_info:
-                validation_errors.append(f"Question {q_num} found in Question Paper but not in Rubric File.")
-                continue
-
-            # Compare Max Marks
-            if qp_info['max_marks'] != rubric_info['max_marks']:
+            # 1. Check total number of questions/rubrics
+            if len(qp_questions_data) != len(parsed_rubrics_data):
                 validation_errors.append(
-                    f"Max Marks mismatch for {q_num}: Question Paper has {qp_info['max_marks']}, "
-                    f"Rubric File has {rubric_info['max_marks']}."
+                    f"Mismatch in total number of questions: Question Paper has {len(qp_questions_data)} "
+                    f"questions, while Rubric File has {len(parsed_rubrics_data)} rubrics."
                 )
+
+            # 2. Check Max Marks consistency for each question
+            current_all_questions_data = {} # Temp dictionary for current validation run
             
-            # If no errors for this specific question, merge the data
-            # Use max_marks from rubric as it's the primary source in the new setup
-            all_questions_data[q_num] = {
-                'question_text': qp_info['text'], # Cleaned text from QP
-                'rubric_text': rubric_info['rubric_text'], # Detailed rubric text
-                'max_marks': rubric_info['max_marks'] # Validated max marks
-            }
-        
-        # --- Display Validation Results ---
-        if validation_errors:
-            for error in validation_errors:
-                st.error(error)
-            st.warning("Please add appropriate document(s) to resolve the discrepancies.")
-            st.session_state.all_questions_data = None # Clear data on validation failure
-            # If there are errors, stop execution to allow user to fix files
-            st.stop() 
-        else:
-            st.success("Documents validated successfully! All question counts and Max Marks match.")
-            st.session_state.all_questions_data = all_questions_data # Store merged data in session state
-            # Force a rerun to proceed with the app, ensuring the state is updated
-            st.rerun() 
-    elif not qp_text or not rubric_text:
-        st.warning("Could not extract text from one or both uploaded files. Please check the file formats.")
-        st.session_state.all_questions_data = None
-        st.stop()
-else:
-    # Initial message if no files are uploaded yet, or only one is uploaded
-    if not st.session_state.all_questions_data:
+            # Get all unique question numbers from both files, sorted numerically
+            all_q_nums = sorted(list(set(qp_questions_data.keys()).union(set(parsed_rubrics_data.keys()))), key=lambda x: int(x[1:]))
+
+            for q_num in all_q_nums:
+                qp_info = qp_questions_data.get(q_num)
+                rubric_info = parsed_rubrics_data.get(q_num)
+
+                if not qp_info:
+                    validation_errors.append(f"Question {q_num} found in Rubric File but not in Question Paper.")
+                    continue
+                if not rubric_info:
+                    validation_errors.append(f"Question {q_num} found in Question Paper but not in Rubric File.")
+                    continue
+
+                # Compare Max Marks
+                if qp_info['max_marks'] != rubric_info['max_marks']:
+                    validation_errors.append(
+                        f"Max Marks mismatch for {q_num}: Question Paper has {qp_info['max_marks']}, "
+                        f"Rubric File has {rubric_info['max_marks']}."
+                    )
+                
+                # If no errors for this specific question (yet), merge the data for this run
+                current_all_questions_data[q_num] = {
+                    'question_text': qp_info['text'], # Cleaned text from QP
+                    'rubric_text': rubric_info['rubric_text'], # Detailed rubric text
+                    'max_marks': rubric_info['max_marks'] # Validated max marks (from rubric if matching)
+                }
+            
+            # --- Display Validation Results ---
+            if validation_errors:
+                for error in validation_errors:
+                    st.error(error)
+                st.warning("Please add appropriate document(s) to resolve the discrepancies.")
+                st.session_state.all_questions_data = None # Clear data on validation failure
+            else:
+                st.success("Documents validated successfully! All question counts and Max Marks match.")
+                st.session_state.all_questions_data = current_all_questions_data # Store merged data in session state
+                # Store file IDs to prevent reprocessing on rerun
+                st.session_state.last_qp_file_id = question_paper_file.file_id
+                st.session_state.last_rubric_file_id = rubric_file.file_id
+                st.rerun() # Force a rerun to display the next steps after successful validation
+        elif not qp_text or not rubric_text:
+            st.warning("Could not extract text from one or both uploaded files. Please check the file formats.")
+            st.session_state.all_questions_data = None
+    # If files haven't changed and data is already in session state, don't re-run processing
+    else:
+        st.success("Documents validated successfully! All question counts and Max Marks match.")
+        # We don't need to rerun here, as the state is already set from a previous run.
+        # This prevents an infinite rerun loop if files are already processed.
+
+else: # If files are not yet uploaded or partially uploaded
+    if st.session_state.all_questions_data is None: # Only show this message if no data is loaded
         st.info("Please upload both the Question Paper and the Rubric File to begin validation.")
-        st.stop() # Stop if files are not uploaded yet or not validated
+        st.stop() # Stop further execution until files are uploaded and validated
+
 
 # If we reach here, it means files were either just validated or already validated in a previous rerun
 # Proceed with the rest of the application using st.session_state.all_questions_data
 if st.session_state.all_questions_data is None or len(st.session_state.all_questions_data) == 0:
     st.error("Error: Validated question and rubric data is missing. Please re-upload documents.")
-    st.stop() # Ensure we stop if data is somehow missing
+    st.stop() # Ensure we stop if data is somehow missing (e.g., after validation error)
 
 # Prepare lists/maps from the validated and merged data
 all_questions_keys = sorted(st.session_state.all_questions_data.keys(), key=lambda x: int(x[1:])) # Sort Q1, Q2, etc.
@@ -626,7 +637,7 @@ if files: # Proceed only if student files are uploaded
         return output.getvalue()
 
     excel_data = to_excel(df_scores)
-    b64 = base64.b64encode(excel_data).decode()
+    b64 = base66.b64encode(excel_data).decode()
     href = f'<a href="data:application/octet-stream;base64,{b64}" download="evaluation_report.xlsx">Download Excel Report</a>'
     st.markdown(href, unsafe_allow_html=True)
 else:
