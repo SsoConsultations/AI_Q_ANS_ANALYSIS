@@ -92,17 +92,18 @@ def inject_logo_and_copyright_css(logo_path="SsoLogo.jpg"):
     )
 
 # -------------------------
-# Initialize NLP Model
+# Initialize NLP Model (Cached with spinner feedback)
 # -------------------------
 @st.cache_resource
-def load_model():
+def load_model_with_feedback():
     """
-    Loads and caches the SentenceTransformer model 'all-MiniLM-L6-v2'.
+    Loads and caches the SentenceTransformer model 'all-MiniLM-L6-v2' with feedback.
     This model is used for calculating semantic similarity between text snippets.
     """
-    return SentenceTransformer('all-MiniLM-L6-v2')
-
-model = load_model()
+    with st.spinner("Loading NLP model (this may take a moment on first run)..."):
+        model = SentenceTransformer('all-MiniLM-L6-v2')
+    st.sidebar.success("NLP model loaded!")
+    return model
 
 # -------------------------
 # Extract text from PDF
@@ -352,31 +353,6 @@ if not st.session_state.authenticated:
     st.stop()
 
 # -------------------------
-# Initialize OpenAI API Key (only if authenticated)
-# -------------------------
-try:
-    openai.api_key = st.secrets["openai"]["api_key"]
-    # Check if API key is valid by making a dummy call if not already confirmed
-    if not st.session_state.openai_api_working_confirmed:
-        try:
-            # Use a very small, cheap model for a quick check
-            openai.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[{"role": "user", "content": "hello"}],
-                max_tokens=5
-            )
-            st.session_state.openai_api_working_confirmed = True
-            st.sidebar.success("OpenAI API key confirmed!")
-        except Exception as e:
-            st.sidebar.warning(f"OpenAI API key may not be fully functional: {e}. Evaluation will fall back to local model.")
-            st.session_state.openai_api_working_confirmed = False
-except KeyError:
-    st.error("OpenAI API key not found in Streamlit secrets. Please configure it in .streamlit/secrets.toml")
-    st.session_state.openai_api_working_confirmed = False
-    #st.stop() # Don't stop, allow local model to be used
-
-
-# -------------------------
 # Streamlit Application Start (Main App)
 # -------------------------
 inject_logo_and_copyright_css()
@@ -384,9 +360,37 @@ inject_logo_and_copyright_css()
 st.title("Dynamic Answer Sheet Evaluation Dashboard")
 
 # -------------------------
-# Logout Button in Sidebar
+# Initial Setup / Loading
 # -------------------------
 with st.sidebar:
+    st.header("App Status")
+    # Load NLP model early with feedback
+    model = load_model_with_feedback()
+
+    # Initialize OpenAI API Key and check validity with feedback
+    try:
+        openai.api_key = st.secrets["openai"]["api_key"]
+        if not st.session_state.openai_api_working_confirmed:
+            with st.spinner("Verifying OpenAI API key..."):
+                try:
+                    # Use a very small, cheap model for a quick check
+                    openai.chat.completions.create(
+                        model="gpt-3.5-turbo",
+                        messages=[{"role": "user", "content": "hello"}],
+                        max_tokens=5
+                    )
+                    st.session_state.openai_api_working_confirmed = True
+                    st.success("OpenAI API key confirmed!")
+                except Exception as e:
+                    st.warning(f"OpenAI API key may not be fully functional: {e}. Evaluation will fall back to local model.")
+                    st.session_state.openai_api_working_confirmed = False
+        else:
+            st.success("OpenAI API key confirmed!") # Show if already confirmed
+    except KeyError:
+        st.error("OpenAI API key not found in Streamlit secrets. Please configure it in .streamlit/secrets.toml")
+        st.session_state.openai_api_working_confirmed = False
+    
+    st.divider() # Separator
     st.header("Navigation")
     if st.button("Logout"):
         st.session_state.authenticated = False
@@ -414,21 +418,24 @@ if question_paper_file and rubric_file:
     rubric_text = ""
 
     # Extract text from Question Paper
-    if question_paper_file.name.endswith(".pdf"):
-        qp_text = extract_text_from_pdf(question_paper_file)
-    else:
-        qp_text = extract_text_from_docx(question_paper_file)
+    with st.spinner("Extracting text from Question Paper..."):
+        if question_paper_file.name.endswith(".pdf"):
+            qp_text = extract_text_from_pdf(question_paper_file)
+        else:
+            qp_text = extract_text_from_docx(question_paper_file)
 
     # Extract text from Rubric File
-    if rubric_file.name.endswith(".pdf"):
-        rubric_text = extract_text_from_pdf(rubric_file)
-    else:
-        rubric_text = extract_text_from_docx(rubric_file)
+    with st.spinner("Extracting text from Rubric File..."):
+        if rubric_file.name.endswith(".pdf"):
+            rubric_text = extract_text_from_pdf(rubric_file)
+        else:
+            rubric_text = extract_text_from_docx(rubric_file)
 
     if qp_text and rubric_text:
         # Parse data from both files
-        qp_questions_data = parse_question_paper_file(qp_text)
-        parsed_rubrics_data = parse_rubric_file(rubric_text)
+        with st.spinner("Parsing question paper and rubric data..."):
+            qp_questions_data = parse_question_paper_file(qp_text)
+            parsed_rubrics_data = parse_rubric_file(rubric_text)
 
         # --- Validation Logic ---
         st.subheader("Document Validation")
@@ -444,7 +451,7 @@ if question_paper_file and rubric_file:
         # 2. Check Max Marks consistency for each question
         all_questions_data = {} # This will store the merged and validated data
         
-        # Get all unique question numbers from both files
+        # Get all unique question numbers from both files, sorted numerically
         all_q_nums = sorted(list(set(qp_questions_data.keys()).union(set(parsed_rubrics_data.keys()))), key=lambda x: int(x[1:]))
 
         for q_num in all_q_nums:
@@ -522,39 +529,48 @@ results = {}
 
 if files: # Proceed only if student files are uploaded
     st.header("Step 3: Evaluation Results")
+    progress_bar = st.progress(0)
+    status_text = st.empty()
 
-    for file in files:
+    for i, file in enumerate(files):
         name = os.path.splitext(file.name)[0] # Get student name from file name
+        status_text.text(f"Processing student: {name} ({i+1}/{len(files)})")
 
         # Extract content from student answer sheet
-        if file.name.endswith(".pdf"):
-            content = extract_text_from_pdf(file)
-        else:
-            content = extract_text_from_docx(file)
+        with st.spinner(f"Extracting text from {name}'s answer sheet..."):
+            if file.name.endswith(".pdf"):
+                content = extract_text_from_pdf(file)
+            else:
+                content = extract_text_from_docx(file)
         
         # Split the content into individual answers based on "Q# Answer:" pattern
         answers_split = re.split(r"Q(\d+)\s*Answer:", content, flags=re.IGNORECASE)
         
         question_ans_map = {}
         if len(answers_split) > 1:
-            for i in range(1, len(answers_split), 2):
-                if (i + 1) < len(answers_split):
-                    q_no = f"Q{answers_split[i].strip()}"
-                    ans = answers_split[i+1].strip()
+            for j in range(1, len(answers_split), 2):
+                if (j + 1) < len(answers_split):
+                    q_no = f"Q{answers_split[j].strip()}"
+                    ans = answers_split[j+1].strip()
                     question_ans_map[q_no] = ans
                 else:
-                    st.warning(f"Could not find answer content for Q{answers_split[i].strip()} in {name}. It might be the last question with no content following.")
+                    st.warning(f"Could not find answer content for Q{answers_split[j].strip()} in {name}. It might be the last question with no content following.")
 
         student_scores = []
         # Iterate through all questions identified in the validated data
-        for q in all_questions_keys:
+        for q_idx, q in enumerate(all_questions_keys):
             ans = question_ans_map.get(q, "") # Get the answer, default to empty string if not found
             # Use the merged data for rubric and max marks
             # Ensure the index is correct based on the sorted all_questions_keys
+            status_text.text(f"Evaluating {name}'s answer to {q}...")
             marks = score_answer(ans, question_rubric_map[q], max_marks_list[questions_for_df.index(q)])
             student_scores.append(marks)
 
         results[name] = student_scores
+        progress_bar.progress((i + 1) / len(files))
+
+    status_text.text("All student answers processed!")
+    st.success("Evaluation complete!")
 
     # -------------------------
     # Create and Display Score Table
