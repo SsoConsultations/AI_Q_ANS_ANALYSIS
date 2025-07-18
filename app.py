@@ -111,7 +111,7 @@ def score_answer(answer, rubric_text, max_mark):
     """
     stripped = answer.strip()
     # Initial check for very short or placeholder answers
-    if not stripped or len(stripped.split()) < 5 or stripped.lower() in ["n/a", "none", "no", "-"]:
+    if not stripped or len(stripped.split()) < 3 or stripped.lower() in ["n/a", "none", "no", "-"]:
         return 0
 
     prompt = f"""
