@@ -29,48 +29,68 @@ def get_image_as_base64(path):
         return None
 
 # -------------------------
-# Custom CSS for logo and general styling
+# Custom CSS for logo and copyright
 # -------------------------
 def inject_custom_css(logo_path="SsoLogo.jpg"):
     """
-    Injects custom CSS to display a logo at the top left corner.
+    Injects custom CSS to display a logo at the top right corner
+    and a copyright notice at the bottom right.
     """
     logo_base64 = get_image_as_base64(logo_path)
     
-    if logo_base64:
-        st.markdown(
-            f"""
-            <style>
-            /* General styling for the main Streamlit container */
-            .main .block-container {{
-                padding-top: 1rem; /* Adjust top padding if needed due to logo position */
-                padding-right: 1rem;
-                padding-left: 1rem;
-                padding-bottom: 1rem;
-            }}
+    css = """
+    <style>
+    /* General styling for the main Streamlit container */
+    .main .block-container {
+        padding-top: 1rem; /* Adjust top padding if needed due to logo position */
+        padding-right: 1rem;
+        padding-left: 1rem;
+        padding-bottom: 1rem;
+    }
 
-            /* Logo positioning */
-            .logo-container {{
-                position: fixed; /* Fixed position relative to the viewport */
-                top: 10px; /* Distance from the top */
-                left: 10px; /* Distance from the left */
-                width: 80px; /* Set logo width */
-                height: auto; /* Maintain aspect ratio */
-                z-index: 9999; /* Ensure it's on top of almost everything */
-                background-color: transparent; /* Ensure no background interferes */
-            }}
-            .logo-container img {{
-                width: 100%;
-                height: 100%;
-                object-fit: contain; /* Ensures the entire image fits within the container */
-            }}
-            </style>
-            <div class="logo-container">
-                <img src="data:image/jpeg;base64,{logo_base64}" alt="Company Logo">
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
+    /* Logo positioning (Top Right) */
+    .logo-container {
+        position: fixed; /* Fixed position relative to the viewport */
+        top: 10px; /* Distance from the top */
+        right: 20px; /* Distance from the right */
+        width: 80px; /* Set logo width */
+        height: auto; /* Maintain aspect ratio */
+        z-index: 9999; /* Ensure it's on top of almost everything */
+        background-color: transparent; /* Ensure no background interferes */
+    }
+    .logo-container img {
+        width: 100%;
+        height: 100%;
+        object-fit: contain; /* Ensures the entire image fits within the container */
+    }
+
+    /* Copyright positioning (Bottom Right) */
+    .copyright-footer {
+        position: fixed; /* Fixed position relative to the viewport */
+        bottom: 10px; /* Distance from the bottom */
+        right: 20px; /* Distance from the right */
+        font-size: 0.8em;
+        color: #888; /* Slightly muted color */
+        z-index: 9998; /* Below the logo but still on top */
+    }
+    </style>
+    """
+
+    if logo_base64:
+        css += f"""
+        <div class="logo-container">
+            <img src="data:image/jpeg;base64,{logo_base64}" alt="Company Logo">
+        </div>
+        """
+    
+    css += """
+    <div class="copyright-footer">
+        © Copyright 2025 SSO Consultants
+    </div>
+    """
+    
+    st.markdown(css, unsafe_allow_html=True)
+
 
 # -------------------------
 # Initialize NLP Model
@@ -252,7 +272,7 @@ if "openai_api_working_confirmed" not in st.session_state:
 # Main Application Flow
 # -------------------------
 
-# Inject custom CSS for the logo at the very beginning
+# Inject custom CSS for the logo and copyright at the very beginning
 inject_custom_css()
 
 if not st.session_state.authenticated:
