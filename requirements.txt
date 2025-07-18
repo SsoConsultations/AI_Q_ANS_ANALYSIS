@@ -1,13 +1,7 @@
 streamlit
-openai
 pandas
-PyPDF2
-python-docx
-python-dotenv
 pdfplumber
-pytesseract
-Pillow
-streamlit
-openai>=1.0.0
-pandas
-PyPDF2
+python-docx
+sentence-transformers
+openai
+openpyxl
