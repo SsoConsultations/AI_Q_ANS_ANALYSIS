@@ -27,7 +27,7 @@ def get_image_as_base64(path):
 def inject_logo_and_copyright_css(logo_path="SsoLogo.jpg"):
     """
     Injects custom CSS to display a logo at the top right corner
-    and a copyright notice at the bottom right.
+    and a copyright notice at the bottom center.
     """
     logo_base64 = ""
     try:
@@ -62,13 +62,15 @@ def inject_logo_and_copyright_css(logo_path="SsoLogo.jpg"):
             height: 100%;
             object-fit: contain;
         }}
-        .bottom-right-copyright {{
+        .bottom-center-copyright {{ /* Changed class name for clarity */
             position: fixed;
             bottom: 10px;
-            right: 20px;
+            left: 50%; /* Start at 50% from the left */
+            transform: translateX(-50%); /* Move back by half its own width to center */
             font-size: 0.8em;
             color: #888888; /* Light gray color */
             z-index: 999; /* Below logo */
+            white-space: nowrap; /* Prevent wrapping if too long */
         }}
         </style>
         """
@@ -78,7 +80,7 @@ def inject_logo_and_copyright_css(logo_path="SsoLogo.jpg"):
         </div>
         """ if logo_base64 else "") +
         """
-        <div class="bottom-right-copyright">
+        <div class="bottom-center-copyright">
             ©copyright SSO Consultants
         </div>
         """,
@@ -231,7 +233,6 @@ def login():
     """
     Handles user login using Streamlit secrets for credentials.
     """
-    # Fix 1: Removed problematic characters from the title
     st.title("Answer Sheet Evaluator - Login") 
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
@@ -255,7 +256,7 @@ if "openai_api_working_confirmed" not in st.session_state:
 # Authentication Check
 # -------------------------
 if not st.session_state.authenticated:
-    inject_logo_and_copyright_css() # Use the new function
+    inject_logo_and_copyright_css()
     login()
     st.stop()
 
@@ -271,18 +272,18 @@ except KeyError:
 # -------------------------
 # Streamlit Application Start (Main App)
 # -------------------------
-inject_logo_and_copyright_css() # Use the new function for main app pages
+inject_logo_and_copyright_css()
 
 st.title("Dynamic Answer Sheet Evaluation Dashboard")
 
 # -------------------------
-# Logout Button in Sidebar (Fix 3)
+# Logout Button in Sidebar
 # -------------------------
 with st.sidebar:
     st.header("Navigation")
     if st.button("Logout"):
         st.session_state.authenticated = False
-        st.session_state.openai_api_working_confirmed = False # Reset confirmation on logout
+        st.session_state.openai_api_working_confirmed = False
         st.rerun()
 
 st.header("Step 1: Upload Question Paper (Rubric)")
