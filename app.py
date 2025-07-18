@@ -83,11 +83,12 @@ def parse_rubric_questions(text):
     Returns:
         A list of tuples, where each tuple contains (question_number_str, question_text, max_marks_float).
     """
-    # Updated regex to match "Q1: ... (Max Marks: 5)" and capture the actual max marks.
-    # It looks for "Q" followed by digits, then a separator (., :, or )), then the question text,
-    # and finally "(Max Marks: X)" where X is the number of marks.
-    question_pattern = re.compile(r"Q(\d+)[.:\)]\s*(.*?)\s*\(Max\s*Marks:\s*(\d+)\)", re.DOTALL)
+    # Updated regex: `[^A-Za-z0-9\n]*` is more flexible for the separator between Q# and question text.
+    question_pattern = re.compile(r"Q(\d+)\s*[^A-Za-z0-9\n]*(.*?)\s*\(Max\s*Marks:\s*(\d+)\)", re.DOTALL | re.IGNORECASE)
     matches = question_pattern.findall(text)
+    
+    # Debug output removed as per user request
+    # st.write("Regex matches found for rubric questions (for debugging):", matches) 
     
     # Convert captured max_mark to float and return the list of tuples.
     return [(f"Q{qno}", qtext.strip(), float(max_mark)) for qno, qtext, max_mark in matches]
@@ -228,8 +229,8 @@ if rubric_file:
     
     # If text was successfully extracted, parse the questions
     if rubric_text:
-        # DEBUG: Display extracted raw rubric text for verification
-        st.text_area("Extracted Text from Rubric File (for debugging)", rubric_text, height=300, key="rubric_text_debug")
+        # Debug output removed as per user request
+        # st.text_area("Extracted Text from Rubric File (for debugging)", rubric_text, height=300, key="rubric_text_debug")
         question_blocks = parse_rubric_questions(rubric_text)
 
 # Check if rubric text is available and questions were parsed successfully
@@ -258,7 +259,8 @@ if rubric_text and files: # Proceed only if rubric and student files are uploade
 
     for file in files:
         name = os.path.splitext(file.name)[0] # Get student name from file name
-        st.subheader(f"Debugging {name}") # Subheader for each student's debug info
+        # Debug output removed as per user request
+        # st.subheader(f"Debugging {name}") 
 
         # Extract content from student answer sheet
         if file.name.endswith(".pdf"):
@@ -266,8 +268,8 @@ if rubric_text and files: # Proceed only if rubric and student files are uploade
         else:
             content = extract_text_from_docx(file)
         
-        # DEBUG: Display extracted raw text from student answer sheet for verification
-        st.text_area(f"Extracted Text from {name} (for debugging)", content, height=300, key=f"student_text_debug_{name}")
+        # Debug output removed as per user request
+        # st.text_area(f"Extracted Text from {name} (for debugging)", content, height=300, key=f"student_text_debug_{name}")
 
         # Split the content into individual answers based on "Q# Answer:" pattern
         # The regex handles optional spaces and is case-insensitive for "Answer"
@@ -286,15 +288,15 @@ if rubric_text and files: # Proceed only if rubric and student files are uploade
                     # Log a warning if an answer chunk is missing for a question number
                     st.warning(f"Could not find answer content for Q{answers_split[i].strip()} in {name}. It might be the last question with no content following.")
 
-        # DEBUG: Display the parsed question_ans_map for verification
-        st.write(f"Parsed Answers for {name} (for debugging):", question_ans_map)
+        # Debug output removed as per user request
+        # st.write(f"Parsed Answers for {name} (for debugging):", question_ans_map)
 
         student_scores = []
         # Iterate through all questions identified in the rubric
         for q in questions:
             ans = question_ans_map.get(q, "") # Get the answer, default to empty string if not found
-            # DEBUG: Display the length of the answer being scored
-            st.text(f"Scoring {q} for {name}: Answer length = {len(ans.split())} words.")
+            # Debug output removed as per user request
+            # st.text(f"Scoring {q} for {name}: Answer length = {len(ans.split())} words.")
             marks = score_answer(ans, question_rubric_map[q], max_marks_map[q])
             student_scores.append(marks)
 
