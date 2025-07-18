@@ -1,136 +1,206 @@
 import streamlit as st
 import pandas as pd
-import PyPDF2
-import io
+import pdfplumber
+import os
+import tempfile
+import base64
+from io import BytesIO
+from sentence_transformers import SentenceTransformer, util
+from docx import Document
+from openpyxl import Workbook
+import openai
 import re
-from openai import OpenAI
 
-# Initialize OpenAI client with API key from Streamlit secrets
-client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+# -------------------------
+# Initialize NLP Model
+# -------------------------
+@st.cache_resource
 
-# ---------- Helper Functions ----------
+def load_model():
+    return SentenceTransformer('all-MiniLM-L6-v2')
 
-def extract_text_from_pdf(pdf_file):
-    reader = PyPDF2.PdfReader(pdf_file)
+model = load_model()
+
+# -------------------------
+# Extract text from PDF
+# -------------------------
+def extract_text_from_pdf(file):
     text = ""
-    for page in reader.pages:
-        text += page.extract_text()
+    with pdfplumber.open(file) as pdf:
+        for page in pdf.pages:
+            extracted = page.extract_text()
+            if extracted:
+                text += extracted + "\n"
     return text
 
-def normalize_question_keys(text):
-    questions = {}
-    current_q = None
-    for line in text.splitlines():
-        line = line.strip()
-        # Match Q1, Q1., q1, etc.
-        match = re.match(r"^(Q?)(\d{1,2})[.:)]?\s", line, re.IGNORECASE)
-        if match:
-            qnum = f"Q{match.group(2)}"
-            current_q = qnum
-            questions[current_q] = line
-        elif current_q:
-            questions[current_q] += " " + line
-    return questions
+# -------------------------
+# Extract text from DOCX
+# -------------------------
+def extract_text_from_docx(file):
+    doc = Document(file)
+    return "\n".join([para.text for para in doc.paragraphs if para.text.strip()])
 
-def extract_score(text):
-    match = re.search(r"\b([0-5])\b", text)
-    return int(match.group(1)) if match else 0
+# -------------------------
+# Extract questions from rubric with default 5 marks
+# -------------------------
+def parse_rubric_questions(text):
+    question_pattern = re.compile(r"Q(\d+)[.:\)]\s*(.*?)\s*Marks\s*\(?\s*5\s*\)?", re.DOTALL)
+    matches = question_pattern.findall(text)
+    return [(f"Q{qno}", qtext.strip(), 5.0) for qno, qtext in matches]
 
-def evaluate_answer_with_gpt(question, answer):
-    prompt = f"""
-You are an academic evaluator for a university exam. You are given a question, its scoring rubric, and a student's answer.
-
-Your task is to assign a score out of 5 marks strictly based on the rubric.
-
-Do not be lenient or add explanation. Just follow the rubric.
-
----
-
-Question:
-{question}
-
-Rubric (scoring guide):
-- 5 marks: All key elements fully explained with appropriate examples.
-- 4 marks: All elements explained, but examples are missing or partially relevant.
-- 3 marks: At least 50% of the key elements explained.
-- 2 marks: Only a few points or vague explanation.
-- 1 mark: Minimal relevant content or vague/incorrect concepts.
-- 0 marks: Not attempted or completely irrelevant answer.
-
----
-
-Student's Answer:
-{answer}
-
----
-
-Only return the score as a number from 0 to 5. Do not include any other explanation.
-"""
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": "You are a strict, objective academic evaluator."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0
-        )
-        result = response.choices[0].message.content.strip()
-        return extract_score(result)
-    except Exception as e:
-        st.warning(f"Evaluation failed: {e}")
+# -------------------------
+# GPT Scoring Logic
+# -------------------------
+def score_answer(answer, rubric_text, max_mark):
+    stripped = answer.strip()
+    if not stripped or len(stripped.split()) < 5 or stripped.lower() in ["n/a", "none", "no", "-"]:
         return 0
 
-# ---------- Streamlit App ----------
+    prompt = f"""
+You are an evaluator. Evaluate the answer strictly based on the rubric and assign marks accordingly. The rubric contains detailed weightages (100%, 75%, 50%, 25%, 0%). Do not provide explanation. Only return a number.
 
-st.set_page_config(page_title="Automated Answer Sheet Evaluator")
-st.title("📊 Automated Answer Sheet Evaluator")
-# ✅ Check if OpenAI API key loaded correctly
-st.success(f"Loaded OpenAI key (last 4 chars): {st.secrets['OPENAI_API_KEY'][-4:]}")
+Rubric:
+{rubric_text}
 
+Answer:
+{answer}
 
-# Step 1: Upload Question Paper (Rubric)
-st.header("1. Upload Question Paper with Rubrics")
-qpaper_file = st.file_uploader("Upload Question Paper (PDF)", type=["pdf"])
+Give only a number out of {max_mark}.
+"""
+    try:
+        response = openai.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+        )
+        score_str = response.choices[0].message.content.strip()
+        return float(score_str)
+    except:
+        emb_answer = model.encode(answer, convert_to_tensor=True)
+        emb_rubric = model.encode(rubric_text, convert_to_tensor=True)
+        similarity = util.pytorch_cos_sim(emb_answer, emb_rubric).item()
 
-# Step 2: Upload Student Answer Sheets
-st.header("2. Upload Student Answer Sheets")
-answer_files = st.file_uploader("Upload Answer Sheets (PDF)", type=["pdf"], accept_multiple_files=True)
+        if similarity < 0.35:
+            return 0
+        elif similarity >= 0.9:
+            return max_mark
+        elif similarity >= 0.75:
+            return 0.75 * max_mark
+        elif similarity >= 0.5:
+            return 0.5 * max_mark
+        elif similarity >= 0.35:
+            return 0.25 * max_mark
+        else:
+            return 0
 
-# Process files
-if qpaper_file and answer_files:
-    with st.spinner("Processing question paper..."):
-        qpaper_text = extract_text_from_pdf(qpaper_file)
-        questions = normalize_question_keys(qpaper_text)
+# -------------------------
+# Login
+# -------------------------
+def login():
+    st.title("🔐 Answer Sheet Evaluator - Login")
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
+    if st.button("Login"):
+        if username in st.secrets["credentials"] and st.secrets["credentials"][username] == password:
+            st.session_state.authenticated = True
+            st.success("Login successful")
+        else:
+            st.error("Invalid username or password")
 
-    # Create results table
-    result_df = pd.DataFrame(columns=["Question No", "Max Marks"] + [f.name for f in answer_files])
-    result_df["Question No"] = list(questions.keys())
-    result_df["Max Marks"] = 5
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
 
-    with st.spinner("Evaluating answers..."):
-        for idx, (qno, qtext) in enumerate(questions.items()):
-            for f in answer_files:
-                answer_text = extract_text_from_pdf(f)
-                answers = normalize_question_keys(answer_text)
-                student_answer = answers.get(qno, "")
-                score = evaluate_answer_with_gpt(qtext, student_answer)
-                result_df.at[idx, f.name] = score
+if not st.session_state.authenticated:
+    login()
+    st.stop()
 
-    # Add total row
-    total_row = ["Total", ""] + [result_df[col][:-1].astype(int).sum() for col in result_df.columns[2:]]
-    result_df.loc[len(result_df)] = total_row
+# -------------------------
+# Initialize OpenAI
+# -------------------------
+openai.api_key = st.secrets["openai"]["api_key"]
 
-    st.header("📋 Final Evaluation Table")
-    st.dataframe(result_df, use_container_width=True)
+# -------------------------
+# App Start
+# -------------------------
+st.title("📄 Dynamic Answer Sheet Evaluation Dashboard")
 
-    # Download option
-    csv = result_df.to_csv(index=False).encode('utf-8')
-    st.download_button(
-        label="📥 Download Results as CSV",
-        data=csv,
-        file_name='evaluation_results.csv',
-        mime='text/csv',
-    )
+st.header("Step 1: Upload Question Paper (Rubric)")
+rubric_file = st.file_uploader("Upload Rubric File (.docx or .pdf)", type=["docx", "pdf"])
+
+rubric_text = ""
+question_blocks = []
+
+if rubric_file:
+    if rubric_file.name.endswith(".pdf"):
+        rubric_text = extract_text_from_pdf(rubric_file)
+    else:
+        rubric_text = extract_text_from_docx(rubric_file)
+    question_blocks = parse_rubric_questions(rubric_text)
+
+if not rubric_text or not question_blocks:
+    st.warning("Please upload a valid rubric with Q1, Q2... and 'Marks (5)' in each question.")
+    st.stop()
+
+# -------------------------
+# Upload Answer Sheets
+# -------------------------
+st.header("Step 2: Upload Student Answer Sheets")
+files = st.file_uploader("Upload PDF or DOCX files", type=["pdf", "docx"], accept_multiple_files=True)
+
+# -------------------------
+# Evaluate Answers
+# -------------------------
+results = {}
+questions = [q for q, _, _ in question_blocks]
+max_marks_list = [m for _, _, m in question_blocks]
+question_rubric_map = {q: text for q, text, _ in question_blocks}
+max_marks_map = {q: m for q, _, m in question_blocks}
+
+if rubric_text and files:
+    st.header("Step 3: Evaluation Results")
+
+    for file in files:
+        name = os.path.splitext(file.name)[0]
+        if file.name.endswith(".pdf"):
+            content = extract_text_from_pdf(file)
+        else:
+            content = extract_text_from_docx(file)
+
+        answers_split = re.split(r"Q(\d+)[.:\)\n]", content)
+        question_ans_map = {}
+        for i in range(1, len(answers_split), 2):
+            q_no = f"Q{answers_split[i]}"
+            ans = answers_split[i+1].strip()
+            question_ans_map[q_no] = ans
+
+        student_scores = []
+        for q in questions:
+            ans = question_ans_map.get(q, "")
+            marks = score_answer(ans, question_rubric_map[q], max_marks_map[q])
+            student_scores.append(marks)
+
+        results[name] = student_scores
+
+    # Create Score Table
+    df_scores = pd.DataFrame(results, index=questions)
+    df_scores.insert(0, "Max Marks", max_marks_list)
+    df_scores.index.name = "Q. No"
+    total_row = [sum(max_marks_list)] + [df_scores[col].sum() for col in df_scores.columns if col != "Max Marks"]
+    df_scores.loc["Total"] = total_row
+
+    st.markdown("### 📊 Final Evaluation Table")
+    st.dataframe(df_scores)
+
+    def to_excel(df):
+        output = BytesIO()
+        writer = pd.ExcelWriter(output, engine='openpyxl')
+        df.to_excel(writer, index=True, sheet_name='Evaluation')
+        writer.close()
+        return output.getvalue()
+
+    excel_data = to_excel(df_scores)
+    b64 = base64.b64encode(excel_data).decode()
+    href = f'<a href="data:application/octet-stream;base64,{b64}" download="evaluation_report.xlsx">📥 Download Excel Report</a>'
+    st.markdown(href, unsafe_allow_html=True)
 else:
-    st.info("Please upload both the question paper and at least one answer sheet.")
+    st.info("Upload rubric and answer sheets to begin evaluation.")
