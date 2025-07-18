@@ -15,7 +15,6 @@ import re
 # Initialize NLP Model
 # -------------------------
 @st.cache_resource
-
 def load_model():
     return SentenceTransformer('all-MiniLM-L6-v2')
 
@@ -44,9 +43,11 @@ def extract_text_from_docx(file):
 # Extract questions from rubric with default 5 marks
 # -------------------------
 def parse_rubric_questions(text):
-    question_pattern = re.compile(r"Q(\d+)[.:\)]\s*(.*?)\s*Marks\s*\(?\s*5\s*\)?", re.DOTALL)
+    # Updated regex to match "Q1: ... (Max Marks: 5)" and capture the actual max marks. 
+    question_pattern = re.compile(r"Q(\d+)[.:\)]\s*(.*?)\s*\(Max\s*Marks:\s*(\d+)\)", re.DOTALL)
     matches = question_pattern.findall(text)
-    return [(f"Q{qno}", qtext.strip(), 5.0) for qno, qtext in matches]
+    # The return statement is adjusted to use the captured max_mark. 
+    return [(f"Q{qno}", qtext.strip(), float(max_mark)) for qno, qtext, max_mark in matches]
 
 # -------------------------
 # GPT Scoring Logic
@@ -75,7 +76,8 @@ Give only a number out of {max_mark}.
         )
         score_str = response.choices[0].message.content.strip()
         return float(score_str)
-    except:
+    except Exception as e: # Added specific exception capture for better debugging
+        st.warning(f"GPT scoring failed: {e}. Falling back to similarity scoring.")
         emb_answer = model.encode(answer, convert_to_tensor=True)
         emb_rubric = model.encode(rubric_text, convert_to_tensor=True)
         similarity = util.pytorch_cos_sim(emb_answer, emb_rubric).item()
@@ -135,10 +137,14 @@ if rubric_file:
         rubric_text = extract_text_from_pdf(rubric_file)
     else:
         rubric_text = extract_text_from_docx(rubric_file)
-    question_blocks = parse_rubric_questions(rubric_text)
+    
+    # Only try to parse if rubric_text is not empty
+    if rubric_text:
+        question_blocks = parse_rubric_questions(rubric_text)
 
+# Check if rubric_text is available and questions were parsed successfully
 if not rubric_text or not question_blocks:
-    st.warning("Please upload a valid rubric with Q1, Q2... and 'Marks (5)' in each question.")
+    st.warning("Please upload a valid rubric. Ensure questions are formatted like 'Q1: ... (Max Marks: 5)'.")
     st.stop()
 
 # -------------------------
@@ -166,12 +172,16 @@ if rubric_text and files:
         else:
             content = extract_text_from_docx(file)
 
-        answers_split = re.split(r"Q(\d+)[.:\)\n]", content)
+        # This regex should work for splitting answers based on Q1:, Q2:, etc.
+        answers_split = re.split(r"Q(\d+)[.:\)\n]", content) 
         question_ans_map = {}
-        for i in range(1, len(answers_split), 2):
-            q_no = f"Q{answers_split[i]}"
-            ans = answers_split[i+1].strip()
-            question_ans_map[q_no] = ans
+        # Ensure answers_split has enough elements before iterating
+        if len(answers_split) > 1:
+            for i in range(1, len(answers_split), 2):
+                q_no = f"Q{answers_split[i]}"
+                # Handle cases where an answer might be empty or missing
+                ans = answers_split[i+1].strip() if (i+1) < len(answers_split) else ""
+                question_ans_map[q_no] = ans
 
         student_scores = []
         for q in questions:
