@@ -3,7 +3,7 @@ import pandas as pd
 import pdfplumber
 import os
 import tempfile
-import base64
+import base64 # Corrected: Changed base66 to base64
 from io import BytesIO
 from sentence_transformers import SentenceTransformer, util
 from docx import Document
@@ -349,6 +349,12 @@ if "all_questions_data" not in st.session_state:
 # New session state for initialization status
 if "initialized" not in st.session_state:
     st.session_state.initialized = False
+# Session states to track uploaded file IDs to avoid reprocessing on every rerun
+if 'last_qp_file_id' not in st.session_state:
+    st.session_state.last_qp_file_id = None
+if 'last_rubric_file_id' not in st.session_state:
+    st.session_state.last_rubric_file_id = None
+
 
 # -------------------------
 # Authentication Check
@@ -419,6 +425,8 @@ with st.sidebar:
         st.session_state.openai_api_working_confirmed = False
         st.session_state.all_questions_data = None
         st.session_state.initialized = False # Reset initialized state
+        st.session_state.last_qp_file_id = None # Reset file IDs
+        st.session_state.last_rubric_file_id = None # Reset file IDs
         st.rerun()
 
 
@@ -434,6 +442,9 @@ st.header("Step 1: Upload Question Paper & Rubric")
 
 col1, col2 = st.columns(2) # Use columns for side-by-side uploaders
 
+question_paper_file = None
+rubric_file = None
+
 with col1:
     question_paper_file = st.file_uploader("Upload Question Paper (.docx or .pdf)", type=["docx", "pdf"], key="qp_uploader")
 
@@ -442,9 +453,9 @@ with col2:
 
 # Process and validate files if both are uploaded, or if they were already processed
 if question_paper_file and rubric_file:
-    # Only re-process if files have changed (simple check)
-    if (st.session_state.get('last_qp_file_id') != question_paper_file.file_id or
-        st.session_state.get('last_rubric_file_id') != rubric_file.file_id or
+    # Only re-process if files have changed (check file_id) or if data is not yet loaded
+    if (st.session_state.last_qp_file_id != question_paper_file.file_id or
+        st.session_state.last_rubric_file_id != rubric_file.file_id or
         st.session_state.all_questions_data is None): # Reprocess if data is not loaded
 
         qp_text = ""
@@ -493,9 +504,23 @@ if question_paper_file and rubric_file:
 
                 if not qp_info:
                     validation_errors.append(f"Question {q_num} found in Rubric File but not in Question Paper.")
+                    # Still try to add to current_all_questions_data if rubric info exists
+                    if rubric_info:
+                        current_all_questions_data[q_num] = {
+                            'question_text': f"Question missing from QP: {q_num}", # Placeholder
+                            'rubric_text': rubric_info['rubric_text'],
+                            'max_marks': rubric_info['max_marks']
+                        }
                     continue
                 if not rubric_info:
                     validation_errors.append(f"Question {q_num} found in Question Paper but not in Rubric File.")
+                    # Still try to add to current_all_questions_data if qp info exists
+                    if qp_info:
+                        current_all_questions_data[q_num] = {
+                            'question_text': qp_info['text'],
+                            'rubric_text': f"Rubric missing for QP: {q_num}", # Placeholder
+                            'max_marks': qp_info['max_marks']
+                        }
                     continue
 
                 # Compare Max Marks
@@ -506,18 +531,21 @@ if question_paper_file and rubric_file:
                     )
                 
                 # If no errors for this specific question (yet), merge the data for this run
+                # Prioritize rubric's max_marks if there's a discrepancy reported, or simply use one if they match
+                # For merging, take text from QP and detailed rubric from Rubric file
                 current_all_questions_data[q_num] = {
                     'question_text': qp_info['text'], # Cleaned text from QP
                     'rubric_text': rubric_info['rubric_text'], # Detailed rubric text
-                    'max_marks': rubric_info['max_marks'] # Validated max marks (from rubric if matching)
+                    'max_marks': rubric_info['max_marks'] # Validated max marks (from rubric if matching, or just one if not explicitly mismatched)
                 }
             
             # --- Display Validation Results ---
             if validation_errors:
                 for error in validation_errors:
                     st.error(error)
-                st.warning("Please add appropriate document(s) to resolve the discrepancies.")
-                st.session_state.all_questions_data = None # Clear data on validation failure
+                st.warning("Please adjust your documents to resolve the discrepancies to proceed with a fully validated setup. You can still proceed with potential missing data points.")
+                st.session_state.all_questions_data = current_all_questions_data # Store whatever could be parsed for partial use
+                # No rerun here, let user see errors and fix files
             else:
                 st.success("Documents validated successfully! All question counts and Max Marks match.")
                 st.session_state.all_questions_data = current_all_questions_data # Store merged data in session state
@@ -528,6 +556,8 @@ if question_paper_file and rubric_file:
         elif not qp_text or not rubric_text:
             st.warning("Could not extract text from one or both uploaded files. Please check the file formats.")
             st.session_state.all_questions_data = None
+            st.session_state.last_qp_file_id = None
+            st.session_state.last_rubric_file_id = None
     # If files haven't changed and data is already in session state, don't re-run processing
     else:
         st.success("Documents validated successfully! All question counts and Max Marks match.")
@@ -537,7 +567,13 @@ if question_paper_file and rubric_file:
 else: # If files are not yet uploaded or partially uploaded
     if st.session_state.all_questions_data is None: # Only show this message if no data is loaded
         st.info("Please upload both the Question Paper and the Rubric File to begin validation.")
-        st.stop() # Stop further execution until files are uploaded and validated
+    # If data exists from a previous successful upload, but user navigated away/reran, allow continuation
+    elif st.session_state.all_questions_data is not None and len(st.session_state.all_questions_data) > 0:
+        st.success("Question Paper and Rubric previously validated. Ready for Step 2.")
+    else:
+        st.warning("Please upload valid Question Paper and Rubric files.")
+    
+    st.stop() # Stop further execution until files are uploaded and validated, or previous valid state is confirmed
 
 
 # If we reach here, it means files were either just validated or already validated in a previous rerun
@@ -637,7 +673,7 @@ if files: # Proceed only if student files are uploaded
         return output.getvalue()
 
     excel_data = to_excel(df_scores)
-    b64 = base66.b64encode(excel_data).decode()
+    b64 = base64.b64encode(excel_data).decode() # CORRECTED LINE: base66 changed to base64
     href = f'<a href="data:application/octet-stream;base64,{b64}" download="evaluation_report.xlsx">Download Excel Report</a>'
     st.markdown(href, unsafe_allow_html=True)
 else:
