@@ -154,43 +154,43 @@ def extract_text_from_docx(file):
         return ""
 
 # -------------------------
-# NEW: Parse Questions from QUESTION_PAPER.docx
+# NEW: Parse Questions from QUESTION_PAPER.docx (UPDATED FIX)
 # -------------------------
 def parse_question_paper_file(text):
     """
     Parses text from QUESTION_PAPER.docx to extract question number,
     clean question text (removing Max Marks), and Max Marks.
-    Expected format: Q#: Question text (Max Marks: #)
+    Expected format: Q#: Question text (Max Marks: #) - can span lines.
 
     Returns a dictionary: {'Q#': {'text': 'clean question text', 'max_marks': float}, ...}
     """
     questions_data = {}
-    # Regex to capture Q#, question text (including Max Marks part), and Max Marks value
-    # We capture the entire Q and the Max Marks part to remove it later for clean text.
-    question_pattern = re.compile(
-        r"Q(\d+):\s*(.*?)(?:\s*\(Max\s*Marks:\s*(\d+)\))?",
+    # Regex to capture Q#, and the entire rest of the line/block for the question
+    # We use a non-greedy match (.*?) followed by a positive lookahead to ensure we stop at the next question or end of string.
+    # This captures the full question block including the (Max Marks: #) part.
+    question_block_pattern = re.compile(
+        r"(Q(\d+):\s*.*?)(?=\n*Q\d+:|\Z)", # Capture until next Q# followed by :, potentially with newlines, or end of string
         re.DOTALL | re.IGNORECASE
     )
-    # The (?:...) non-capturing group for Max Marks makes it optional
-    # and the outer capturing group for question text includes it if present.
 
-    # Find all matches
-    matches = question_pattern.finditer(text)
+    matches = question_block_pattern.finditer(text)
 
     for match in matches:
-        q_num = f"Q{match.group(1)}"
-        full_question_text = match.group(2).strip()
-        max_marks = match.group(3) # This will be the numerical part or None
+        full_question_block = match.group(1).strip() # This is "Q#: Question text (Max Marks: #)\n(Max Marks: #)"
+        q_num = f"Q{match.group(2)}"
 
-        # Clean the question text: remove the (Max Marks: X) part if it exists
-        clean_question_text = re.sub(r'\s*\(Max\s*Marks:\s*\d+\)', '', full_question_text, flags=re.IGNORECASE).strip()
+        # Now, separately extract Max Marks from the full_question_block
+        max_marks_match = re.search(r"\(Max\s*Marks:\s*(\d+)\)", full_question_block, re.IGNORECASE)
+        max_marks_float = 0.0
+        if max_marks_match:
+            try:
+                max_marks_float = float(max_marks_match.group(1))
+            except ValueError:
+                st.error(f"Could not parse Max Marks for {q_num} from Question Paper (value error). Please ensure it's a number.")
 
-        # Convert max_marks to float, default to 0 or raise error if crucial
-        try:
-            max_marks_float = float(max_marks) if max_marks else 0.0 # Default to 0 if not found, for validation
-        except ValueError:
-            st.error(f"Could not parse Max Marks for {q_num} from Question Paper. Please ensure it's a number.")
-            max_marks_float = 0.0 # Or raise an error to stop execution
+        # Clean the question text: remove the "Q#:" prefix and the "(Max Marks: X)" part
+        clean_question_text = re.sub(r"Q\d+:\s*", "", full_question_block, flags=re.IGNORECASE).strip()
+        clean_question_text = re.sub(r'\s*\(Max\s*Marks:\s*\d+\)', '', clean_question_text, flags=re.IGNORECASE).strip()
 
         questions_data[q_num] = {
             'text': clean_question_text,
@@ -245,6 +245,76 @@ def parse_rubric_file(text):
     return rubrics_data
 
 # -------------------------
+# Score Answer using OpenAI (GPT-4) or SentenceTransformer
+# -------------------------
+def score_answer(student_answer, ideal_rubric, max_marks):
+    """
+    Scores a student's answer against an ideal rubric using OpenAI's GPT-4,
+    with a fallback to SentenceTransformer for semantic similarity.
+
+    Args:
+        student_answer (str): The text of the student's answer.
+        ideal_rubric (str): The detailed rubric for the question.
+        max_marks (float): The maximum marks for the question.
+
+    Returns:
+        float: The score awarded to the student's answer.
+    """
+    if not student_answer.strip():
+        return 0.0 # Return 0 if student answer is empty
+
+    # Try scoring with OpenAI GPT-4
+    if st.session_state.openai_api_working_confirmed:
+        try:
+            response = openai.chat.completions.create(
+                model="gpt-4",
+                messages=[
+                    {"role": "system", "content": "You are an AI assistant that evaluates student answers based on a given rubric. Provide a score out of the maximum marks. Be objective and fair. Focus only on the content matching the rubric."},
+                    {"role": "user", "content": f"Student Answer: {student_answer}\n\nRubric: {ideal_rubric}\n\nMax Marks: {max_marks}\n\nBased on the rubric, how many marks (out of {max_marks}) should the student get? Provide only the numerical score. If the answer does not align with the rubric at all, provide 0."}
+                ],
+                max_tokens=50,
+                temperature=0.0 # Keep temperature low for factual scoring
+            )
+            score_text = response.choices[0].message.content.strip()
+            # Attempt to extract a numerical score, even if extra text is present
+            numerical_score_match = re.search(r'(\d+(\.\d+)?)', score_text)
+            if numerical_score_match:
+                gpt_score = float(numerical_score_match.group(1))
+                # Ensure score is within bounds [0, max_marks]
+                return max(0.0, min(gpt_score, max_marks))
+            else:
+                st.warning(f"GPT-4 did not return a clear numerical score for: '{student_answer[:50]}...'. Falling back to semantic similarity.")
+                st.session_state.openai_api_working_confirmed = False # Assume API is not working as expected
+        except openai.AuthenticationError:
+            st.error("OpenAI API authentication failed. Please check your API key in Streamlit secrets.")
+            st.session_state.openai_api_working_confirmed = False # Disable further API calls
+        except openai.APITimeoutError:
+            st.warning("OpenAI API call timed out. Falling back to semantic similarity.")
+            st.session_state.openai_api_working_confirmed = False # Assume API is slow/down
+        except openai.APIError as e:
+            st.warning(f"OpenAI API error: {e}. Falling back to semantic similarity.")
+            st.session_state.openai_api_working_confirmed = False # Assume API is not working
+
+    # Fallback to SentenceTransformer semantic similarity
+    try:
+        # Encode sentences to get their embeddings
+        answer_embedding = model.encode(student_answer, convert_to_tensor=True)
+        rubric_embedding = model.encode(ideal_rubric, convert_to_tensor=True)
+
+        # Calculate cosine similarity
+        cosine_similarity = util.cos_sim(answer_embedding, rubric_embedding).item()
+
+        # Scale similarity to marks
+        # A simple linear scaling: similarity 0-1 maps to marks 0-max_marks
+        # You might want to fine-tune this scaling based on empirical results
+        semantic_score = cosine_similarity * max_marks
+        return max(0.0, min(semantic_score, max_marks)) # Ensure score is within bounds
+    except Exception as e:
+        st.error(f"Error with SentenceTransformer: {e}")
+        return 0.0
+
+
+# -------------------------
 # Login Function
 # -------------------------
 def login():
@@ -286,9 +356,25 @@ if not st.session_state.authenticated:
 # -------------------------
 try:
     openai.api_key = st.secrets["openai"]["api_key"]
+    # Check if API key is valid by making a dummy call if not already confirmed
+    if not st.session_state.openai_api_working_confirmed:
+        try:
+            # Use a very small, cheap model for a quick check
+            openai.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "hello"}],
+                max_tokens=5
+            )
+            st.session_state.openai_api_working_confirmed = True
+            st.sidebar.success("OpenAI API key confirmed!")
+        except Exception as e:
+            st.sidebar.warning(f"OpenAI API key may not be fully functional: {e}. Evaluation will fall back to local model.")
+            st.session_state.openai_api_working_confirmed = False
 except KeyError:
     st.error("OpenAI API key not found in Streamlit secrets. Please configure it in .streamlit/secrets.toml")
-    st.stop()
+    st.session_state.openai_api_working_confirmed = False
+    #st.stop() # Don't stop, allow local model to be used
+
 
 # -------------------------
 # Streamlit Application Start (Main App)
@@ -359,7 +445,7 @@ if question_paper_file and rubric_file:
         all_questions_data = {} # This will store the merged and validated data
         
         # Get all unique question numbers from both files
-        all_q_nums = sorted(list(set(qp_questions_data.keys()).union(set(parsed_rubrics_data.keys()))))
+        all_q_nums = sorted(list(set(qp_questions_data.keys()).union(set(parsed_rubrics_data.keys()))), key=lambda x: int(x[1:]))
 
         for q_num in all_q_nums:
             qp_info = qp_questions_data.get(q_num)
@@ -393,7 +479,8 @@ if question_paper_file and rubric_file:
                 st.error(error)
             st.warning("Please add appropriate document(s) to resolve the discrepancies.")
             st.session_state.all_questions_data = None # Clear data on validation failure
-            st.stop() # Stop further execution
+            # If there are errors, stop execution to allow user to fix files
+            st.stop() 
         else:
             st.success("Documents validated successfully! All question counts and Max Marks match.")
             st.session_state.all_questions_data = all_questions_data # Store merged data in session state
@@ -463,6 +550,7 @@ if files: # Proceed only if student files are uploaded
         for q in all_questions_keys:
             ans = question_ans_map.get(q, "") # Get the answer, default to empty string if not found
             # Use the merged data for rubric and max marks
+            # Ensure the index is correct based on the sorted all_questions_keys
             marks = score_answer(ans, question_rubric_map[q], max_marks_list[questions_for_df.index(q)])
             student_scores.append(marks)
 
