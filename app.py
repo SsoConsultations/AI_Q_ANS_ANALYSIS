@@ -83,14 +83,11 @@ def parse_rubric_questions(text):
     Returns:
         A list of tuples, where each tuple contains (question_number_str, question_text, max_marks_float).
     """
-    # More robust regex for "Q#: ... (Max Marks: #)"
-    # The `[^A-Za-z0-9\n]*` part is more flexible for the separator between Q# and question text,
-    # matching any non-alphanumeric, non-newline characters.
-    question_pattern = re.compile(r"Q(\d+)\s*[^A-Za-z0-9\n]*(.*?)\s*\(Max\s*Marks:\s*(\d+)\)", re.DOTALL | re.IGNORECASE)
+    # Updated regex to match "Q1: ... (Max Marks: 5)" and capture the actual max marks.
+    # It looks for "Q" followed by digits, then a separator (., :, or )), then the question text,
+    # and finally "(Max Marks: X)" where X is the number of marks.
+    question_pattern = re.compile(r"Q(\d+)[.:\)]\s*(.*?)\s*\(Max\s*Marks:\s*(\d+)\)", re.DOTALL)
     matches = question_pattern.findall(text)
-    
-    # DEBUG: Display what matches were found by the regex
-    st.write("Regex matches found for rubric questions (for debugging):", matches) # New debug line
     
     # Convert captured max_mark to float and return the list of tuples.
     return [(f"Q{qno}", qtext.strip(), float(max_mark)) for qno, qtext, max_mark in matches]
@@ -191,7 +188,7 @@ if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
 # Initialize flag for OpenAI API confirmation message
 if "openai_api_working_confirmed" not in st.session_state:
-    st.session_state.openai_api_confirmed = False
+    st.session_state.openai_api_working_confirmed = False
 
 # -------------------------
 # Authentication Check
@@ -289,7 +286,7 @@ if rubric_text and files: # Proceed only if rubric and student files are uploade
                     # Log a warning if an answer chunk is missing for a question number
                     st.warning(f"Could not find answer content for Q{answers_split[i].strip()} in {name}. It might be the last question with no content following.")
 
-        # DEBUG: Display the parsed question_ans_map
+        # DEBUG: Display the parsed question_ans_map for verification
         st.write(f"Parsed Answers for {name} (for debugging):", question_ans_map)
 
         student_scores = []
