@@ -12,6 +12,57 @@ import openai
 import re
 
 # -------------------------
+# Utility function for image encoding
+# -------------------------
+def get_image_as_base64(path):
+    """
+    Reads an image file and returns its Base64 encoded string.
+    """
+    with open(path, "rb") as image_file:
+        return base64.b64encode(image_file.read()).decode()
+
+# -------------------------
+# Custom CSS for logo
+# -------------------------
+def inject_logo_css(logo_path="SsoLogo.jpg"):
+    """
+    Injects custom CSS to display a logo at the top right corner.
+    """
+    try:
+        logo_base64 = get_image_as_base64(logo_path)
+        st.markdown(
+            f"""
+            <style>
+            .css-1jc7on1.e16nr0p31 {{ /* Target the main header/top area */
+                position: relative;
+            }}
+            .logo-container {{
+                position: absolute;
+                top: 0px; /* Adjust as needed */
+                right: 20px; /* Adjust as needed */
+                width: 100px; /* Set logo width */
+                height: auto; /* Maintain aspect ratio */
+                z-index: 1000; /* Ensure it's above other elements */
+            }}
+            .logo-container img {{
+                width: 100%;
+                height: 100%;
+                object-fit: contain; /* Ensures the entire image fits within the container */
+            }}
+            </style>
+            <div class="logo-container">
+                <img src="data:image/jpeg;base64,{logo_base64}" alt="Company Logo">
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+    except FileNotFoundError:
+        st.warning(f"Logo file '{logo_path}' not found. Please ensure it's in the same directory as app.py.")
+    except Exception as e:
+        st.error(f"Error loading or displaying logo: {e}")
+
+
+# -------------------------
 # Initialize NLP Model
 # -------------------------
 @st.cache_resource
@@ -83,10 +134,8 @@ def parse_rubric_questions(text):
     Returns:
         A list of tuples, where each tuple contains (question_number_str, question_text, max_marks_float).
     """
-    # Updated regex to match "Q1: ... (Max Marks: 5)" and capture the actual max marks.
-    # It looks for "Q" followed by digits, then a separator (., :, or )), then the question text,
-    # and finally "(Max Marks: X)" where X is the number of marks.
-    question_pattern = re.compile(r"Q(\d+)[.:\)]\s*(.*?)\s*\(Max\s*Marks:\s*(\d+)\)", re.DOTALL)
+    # Updated regex: `[^A-Za-z0-9\n]*` is more flexible for the separator between Q# and question text.
+    question_pattern = re.compile(r"Q(\d+)\s*[^A-Za-z0-9\n]*(.*?)\s*\(Max\s*Marks:\s*(\d+)\)", re.DOTALL | re.IGNORECASE)
     matches = question_pattern.findall(text)
     
     # Convert captured max_mark to float and return the list of tuples.
@@ -110,7 +159,7 @@ def score_answer(answer, rubric_text, max_mark):
     """
     stripped = answer.strip()
     # Initial check for very short or placeholder answers
-    if not stripped or len(stripped.split()) < 5 or stripped.lower() in ["n/a", "none", "no", "-"]:
+    if not stripped or len(stripped.split()) < 3 or stripped.lower() in ["n/a", "none", "no", "-"]:
         return 0
 
     prompt = f"""
@@ -195,6 +244,8 @@ if "openai_api_working_confirmed" not in st.session_state:
 # -------------------------
 # If not authenticated, display the login page and stop execution
 if not st.session_state.authenticated:
+    # Inject logo CSS even on the login page
+    inject_logo_css()
     login()
     st.stop() # Stop further execution until authenticated
 
@@ -209,8 +260,11 @@ except KeyError:
     st.stop() # Stop if API key is not configured
 
 # -------------------------
-# Streamlit Application Start
+# Streamlit Application Start (Main App)
 # -------------------------
+# Inject logo CSS for the main application pages
+inject_logo_css()
+
 st.title("📄 Dynamic Answer Sheet Evaluation Dashboard")
 
 st.header("Step 1: Upload Question Paper (Rubric)")
@@ -228,8 +282,6 @@ if rubric_file:
     
     # If text was successfully extracted, parse the questions
     if rubric_text:
-        # DEBUG: Display extracted raw rubric text for verification
-        st.text_area("Extracted Text from Rubric File (for debugging)", rubric_text, height=300, key="rubric_text_debug")
         question_blocks = parse_rubric_questions(rubric_text)
 
 # Check if rubric text is available and questions were parsed successfully
@@ -258,7 +310,6 @@ if rubric_text and files: # Proceed only if rubric and student files are uploade
 
     for file in files:
         name = os.path.splitext(file.name)[0] # Get student name from file name
-        st.subheader(f"Debugging {name}") # Subheader for each student's debug info
 
         # Extract content from student answer sheet
         if file.name.endswith(".pdf"):
@@ -266,9 +317,6 @@ if rubric_text and files: # Proceed only if rubric and student files are uploade
         else:
             content = extract_text_from_docx(file)
         
-        # DEBUG: Display extracted raw text from student answer sheet for verification
-        st.text_area(f"Extracted Text from {name} (for debugging)", content, height=300, key=f"student_text_debug_{name}")
-
         # Split the content into individual answers based on "Q# Answer:" pattern
         # The regex handles optional spaces and is case-insensitive for "Answer"
         answers_split = re.split(r"Q(\d+)\s*Answer:", content, flags=re.IGNORECASE)
@@ -286,15 +334,10 @@ if rubric_text and files: # Proceed only if rubric and student files are uploade
                     # Log a warning if an answer chunk is missing for a question number
                     st.warning(f"Could not find answer content for Q{answers_split[i].strip()} in {name}. It might be the last question with no content following.")
 
-        # DEBUG: Display the parsed question_ans_map for verification
-        st.write(f"Parsed Answers for {name} (for debugging):", question_ans_map)
-
         student_scores = []
         # Iterate through all questions identified in the rubric
         for q in questions:
             ans = question_ans_map.get(q, "") # Get the answer, default to empty string if not found
-            # DEBUG: Display the length of the answer being scored
-            st.text(f"Scoring {q} for {name}: Answer length = {len(ans.split())} words.")
             marks = score_answer(ans, question_rubric_map[q], max_marks_map[q])
             student_scores.append(marks)
 
