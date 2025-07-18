@@ -100,9 +100,10 @@ def load_model_with_feedback():
     Loads and caches the SentenceTransformer model 'all-MiniLM-L6-v2' with feedback.
     This model is used for calculating semantic similarity between text snippets.
     """
-    with st.spinner("Loading NLP model (this may take a moment on first run)..."):
+    st.info("Starting to load NLP model. This is a large model and may take a moment on the first run...")
+    with st.spinner("Loading NLP model..."):
         model = SentenceTransformer('all-MiniLM-L6-v2')
-    st.sidebar.success("NLP model loaded!")
+    st.success("NLP model loaded successfully!")
     return model
 
 # -------------------------
@@ -343,6 +344,9 @@ if "openai_api_working_confirmed" not in st.session_state:
 # New session state for parsed document data
 if "all_questions_data" not in st.session_state:
     st.session_state.all_questions_data = None
+# New session state for initialization status
+if "initialized" not in st.session_state:
+    st.session_state.initialized = False
 
 # -------------------------
 # Authentication Check
@@ -360,17 +364,20 @@ inject_logo_and_copyright_css()
 st.title("Dynamic Answer Sheet Evaluation Dashboard")
 
 # -------------------------
-# Initial Setup / Loading
+# Initial Setup / Loading (This section runs immediately after login)
 # -------------------------
 with st.sidebar:
     st.header("App Status")
-    # Load NLP model early with feedback
-    model = load_model_with_feedback()
+    
+    # Initialize flag for loading NLP model and OpenAI key
+    if not st.session_state.initialized:
+        # Load NLP model early with detailed feedback
+        model = load_model_with_feedback()
 
-    # Initialize OpenAI API Key and check validity with feedback
-    try:
-        openai.api_key = st.secrets["openai"]["api_key"]
-        if not st.session_state.openai_api_working_confirmed:
+        # Initialize OpenAI API Key and check validity with detailed feedback
+        st.info("Starting OpenAI API key verification...")
+        try:
+            openai.api_key = st.secrets["openai"]["api_key"]
             with st.spinner("Verifying OpenAI API key..."):
                 try:
                     # Use a very small, cheap model for a quick check
@@ -384,12 +391,24 @@ with st.sidebar:
                 except Exception as e:
                     st.warning(f"OpenAI API key may not be fully functional: {e}. Evaluation will fall back to local model.")
                     st.session_state.openai_api_working_confirmed = False
+        except KeyError:
+            st.error("OpenAI API key not found in Streamlit secrets. Please configure it in .streamlit/secrets.toml")
+            st.session_state.openai_api_working_confirmed = False
+        
+        # Mark initialization as complete
+        st.session_state.initialized = True
+        st.rerun() # Rerun to display the main app sections after initialization
+    else:
+        # If already initialized, just show status
+        st.success("App resources are ready!")
+        # Re-load model (from cache) for subsequent runs to be available globally
+        model = load_model_with_feedback() # This will be fast due to @st.cache_resource
+        if st.session_state.openai_api_working_confirmed:
+            st.success("OpenAI API key confirmed!")
         else:
-            st.success("OpenAI API key confirmed!") # Show if already confirmed
-    except KeyError:
-        st.error("OpenAI API key not found in Streamlit secrets. Please configure it in .streamlit/secrets.toml")
-        st.session_state.openai_api_working_confirmed = False
-    
+            st.warning("OpenAI API key not functional, using local model.")
+
+
     st.divider() # Separator
     st.header("Navigation")
     if st.button("Logout"):
@@ -397,7 +416,14 @@ with st.sidebar:
         # Clear sensitive session data on logout
         st.session_state.openai_api_working_confirmed = False
         st.session_state.all_questions_data = None
+        st.session_state.initialized = False # Reset initialized state
         st.rerun()
+
+
+# --- Only show the main app sections if initialization is complete ---
+if not st.session_state.initialized:
+    st.info("Please wait while the application initializes necessary models and API connections. This may take a moment.")
+    st.stop() # Stop further execution until initialization is done
 
 # -------------------------
 # Step 1: Upload Question Paper and Rubric
