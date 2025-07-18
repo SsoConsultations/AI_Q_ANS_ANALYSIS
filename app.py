@@ -43,10 +43,8 @@ def extract_text_from_docx(file):
 # Extract questions from rubric with default 5 marks
 # -------------------------
 def parse_rubric_questions(text):
-    # Updated regex to match "Q1: ... (Max Marks: 5)" and capture the actual max marks. 
     question_pattern = re.compile(r"Q(\d+)[.:\)]\s*(.*?)\s*\(Max\s*Marks:\s*(\d+)\)", re.DOTALL)
     matches = question_pattern.findall(text)
-    # The return statement is adjusted to use the captured max_mark. 
     return [(f"Q{qno}", qtext.strip(), float(max_mark)) for qno, qtext, max_mark in matches]
 
 # -------------------------
@@ -76,8 +74,8 @@ Give only a number out of {max_mark}.
         )
         score_str = response.choices[0].message.content.strip()
         return float(score_str)
-    except Exception as e: # Added specific exception capture for better debugging
-        st.warning(f"GPT scoring failed: {e}. Falling back to similarity scoring.")
+    except Exception as e:
+        st.warning(f"GPT scoring failed for an answer: {e}. Falling back to similarity scoring. Check your OpenAI API key and usage limits if this persists.") #
         emb_answer = model.encode(answer, convert_to_tensor=True)
         emb_rubric = model.encode(rubric_text, convert_to_tensor=True)
         similarity = util.pytorch_cos_sim(emb_answer, emb_rubric).item()
@@ -138,11 +136,9 @@ if rubric_file:
     else:
         rubric_text = extract_text_from_docx(rubric_file)
     
-    # Only try to parse if rubric_text is not empty
     if rubric_text:
         question_blocks = parse_rubric_questions(rubric_text)
 
-# Check if rubric_text is available and questions were parsed successfully
 if not rubric_text or not question_blocks:
     st.warning("Please upload a valid rubric. Ensure questions are formatted like 'Q1: ... (Max Marks: 5)'.")
     st.stop()
@@ -167,25 +163,43 @@ if rubric_text and files:
 
     for file in files:
         name = os.path.splitext(file.name)[0]
+        st.subheader(f"Debugging {name}") #
+
         if file.name.endswith(".pdf"):
             content = extract_text_from_pdf(file)
         else:
             content = extract_text_from_docx(file)
+        
+        # DEBUG: Display extracted raw text
+        st.text_area(f"Extracted Text from {name}", content, height=300) #
 
-        # This regex should work for splitting answers based on Q1:, Q2:, etc.
-        answers_split = re.split(r"Q(\d+)[.:\)\n]", content) 
+        # The regex for splitting student answers needs to be robust.
+        # Let's refine it slightly to ensure it handles "Q# Answer:" and doesn't get confused by "Answer Sheet - Student_X"
+        answers_split = re.split(r"Q(\d+)\s*Answer:", content, flags=re.IGNORECASE) #
+        
         question_ans_map = {}
-        # Ensure answers_split has enough elements before iterating
+        # The split will put the text before the first Q# into answers_split[0]
+        # We need to iterate from 1, checking pairs of (question_number, answer_text)
         if len(answers_split) > 1:
             for i in range(1, len(answers_split), 2):
-                q_no = f"Q{answers_split[i]}"
-                # Handle cases where an answer might be empty or missing
-                ans = answers_split[i+1].strip() if (i+1) < len(answers_split) else ""
-                question_ans_map[q_no] = ans
+                if (i + 1) < len(answers_split): # Ensure there's an answer chunk after the Q number
+                    q_no = f"Q{answers_split[i].strip()}" # Strip to remove potential whitespace around the number
+                    ans = answers_split[i+1].strip()
+                    question_ans_map[q_no] = ans
+                else:
+                    # Handle case where the last Q has no content following it or split issue
+                    st.warning(f"Could not find answer content for Q{answers_split[i].strip()} in {name}.") #
+
+
+        # DEBUG: Display the parsed question_ans_map
+        st.write(f"Parsed Answers for {name}:", question_ans_map) #
+
 
         student_scores = []
         for q in questions:
             ans = question_ans_map.get(q, "")
+            # DEBUG: Display which answer is being scored for which question
+            st.text(f"Scoring {q} for {name}: Answer length = {len(ans.split())} words.") #
             marks = score_answer(ans, question_rubric_map[q], max_marks_map[q])
             student_scores.append(marks)
 
